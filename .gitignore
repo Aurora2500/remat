@@ -1,4 +1,3 @@
-obj
-remat
 *.make
 Makefile
+target

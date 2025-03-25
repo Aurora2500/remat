@@ -1,0 +1,79 @@
+def event_loop():
+  ###### HELPER FUNCTIONS ######
+
+  def get_op_id():
+    # block until an id is received
+    id_arr = socket_read_binary_integer(1, "async_callback", 0)
+    return id_arr[1]
+  end
+
+  def get_int(reg):
+    return read_input_integer_register(reg+24)
+  end
+
+  def async_finish(id):
+    socket_send_int(id, "async_callback")
+  end
+
+  def list_to_octet(l, offset):
+    octet = 0
+    if l[offset]:
+      octet = octet + 1
+    end
+    if l[offset+1]:
+      octet = octet + 2
+    end
+    if l[offset+2]:
+      octet = octet + 4
+    end
+    if l[offset+3]:
+      octet = octet + 8
+    end
+    if l[offset+4]:
+      octet = octet + 16
+    end
+    if l[offset+5]:
+      octet = octet + 32
+    end
+    if l[offset+6]:
+      octet = octet + 64
+    end
+    if l[offset+7]:
+      octet = octet + 128
+    end
+    return octet
+  end
+
+  def async_setup():
+    addr = integer_to_binary_list(get_int(0))
+    port = get_int(1)
+    octet_1 = list_to_octet(addr, 24) 
+    octet_2 = list_to_octet(addr, 16) 
+    octet_3 = list_to_octet(addr, 8) 
+    octet_4 = list_to_octet(addr, 0) 
+    ip_addr = to_str(octet_1) + "." + to_str(octet_2) + "." + to_str(octet_3) + "." + to_str(octet_4)
+    conn_successful = socket_open(ip_addr, port, "async_callback")
+    if not conn_successful:
+      textmsg("ERROR: Failed to connect to callback server")
+      halt
+    end
+  end
+
+  def process_cmd(op_id):
+    cmd = get_int(0)
+      return conn_successful
+    end
+  end
+
+  ###### EVENT LOOP ######
+
+  textmsg("Loaded Event Loop")
+  async_setup()
+  textmsg("Callback server connection established")
+  keep_running = True
+  while keep_running:
+    op_id = get_op_id()
+    keep_running = process_cmd(op_id)
+    sync()
+  end
+end

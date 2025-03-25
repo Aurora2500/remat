@@ -1,0 +1,26 @@
+[package]
+name = "v4l2-sys"
+version = "1.1.0"
+authors = ["Russel Winder <russel@winder.org.uk>"]
+categories = ["api-bindings", "hardware-support", "external-ffi-bindings"]
+keywords = ["ffi", "v4l2", "video", "dvb", "sdr"]
+license = "LGPL-3.0"
+build = "build.rs"
+description = """
+Rust FFI binding for the C API of Video for Linux API version 2, V4L2.
+"""
+repository = "https://gitlab.com/Russel/rust-v4l2-sys"
+readme = "README.md"
+edition = "2018"
+
+[dependencies]
+
+[build-dependencies]
+# So as to allow projects to use this crate with soapysdr-sys, the build of this
+# crate must use the same bindgen as soapysdr-sys. This is exceedingly silly,
+# there should not be such a coupling required by Cargo.
+# cf. https://github.com/rust-lang/cargo/issues/5237
+bindgen = "0.71.1"
+
+[dev-dependencies]
+rstest = "0.6.3"
