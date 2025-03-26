@@ -27,7 +27,12 @@ impl RtdeClient {
 		Ok(Self { conn })
 	}
 
-	pub async fn setup(&mut self, callback_addr: SocketAddrV4) -> io::Result<()> {
+	pub fn get_local_addr(&self) -> io::Result<IpAddr> {
+		let local_addr = self.conn.local_addr()?;
+		Ok(local_addr.ip())
+	}
+
+	pub async fn setup(&mut self) -> io::Result<()> {
 		self.request_protocol().await?;
 		self.setup_recipes().await?;
 		// probably only need it for output stuff? probably don't want it anyways

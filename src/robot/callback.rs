@@ -1,4 +1,4 @@
-use std::net::SocketAddrV4;
+use std::net::Ipv4Addr;
 
 use tokio::{
 	io::{self, AsyncReadExt, AsyncWriteExt},
@@ -10,13 +10,15 @@ use tokio::{
 	task::{self, JoinHandle},
 };
 
+pub const CALLBACK_PORT: u16 = 40808;
+
 pub struct CallbackServer {
 	listener: TcpListener,
 }
 
 impl CallbackServer {
-	pub async fn new(addr: SocketAddrV4) -> io::Result<Self> {
-		let listener = TcpListener::bind(addr).await?;
+	pub async fn new(addr: Ipv4Addr) -> io::Result<Self> {
+		let listener = TcpListener::bind((addr, CALLBACK_PORT)).await?;
 		Ok(Self { listener })
 	}
 
@@ -38,7 +40,7 @@ async fn callback_event_loop(mut conn: TcpStream, mut rx: Receiver<Option<OneSen
 			.expect("Callback conn unexpectedly closed");
 		if let Some(req) = req {
 			conn.read_u8().await.expect("Callback unexpectedly closed");
-			if let Err(_) = req.send(()) {}
+			let _ = req.send(());
 		}
 	}
 }
@@ -55,11 +57,11 @@ impl CallbackClient {
 
 	pub async fn awaitable(&self) {
 		let (tx, rx) = oneshot_channel();
-		self.tx.send(Some(tx)).await;
-		if let Err(_) = rx.await {}
+		let _ = self.tx.send(Some(tx)).await;
+		let _ = rx.await;
 	}
 
 	pub async fn non_awaitable(&self) {
-		self.tx.send(None).await;
+		let _ = self.tx.send(None).await;
 	}
 }

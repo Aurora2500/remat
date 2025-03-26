@@ -11,6 +11,32 @@ def event_loop():
     return read_input_integer_register(reg+24)
   end
 
+  def get_float(reg):
+    return read_input_float_register(reg+24)
+  end
+
+  def get_q(reg):
+    local q = [0, 0, 0, 0, 0, 0]
+    q[0] = get_float(reg+0)
+    q[1] = get_float(reg+1)
+    q[2] = get_float(reg+2)
+    q[3] = get_float(reg+3)
+    q[4] = get_float(reg+4)
+    q[5] = get_float(reg+5)
+    return q
+  end
+
+  def get_pose(reg):
+    pose = p[0, 0, 0, 0, 0, 0]
+    pose[0] = get_float(reg+0)
+    pose[1] = get_float(reg+1)
+    pose[2] = get_float(reg+2)
+    pose[3] = get_float(reg+3)
+    pose[4] = get_float(reg+4)
+    pose[5] = get_float(reg+5)
+    return pose
+  end
+
   def async_finish(id):
     socket_send_int(id, "async_callback")
   end
@@ -59,9 +85,20 @@ def event_loop():
     end
   end
 
+  thread servoj_thread():
+
+    servoj(q, acceleration, speed, time, lookahead_time, gain)
+  end
+
   def process_cmd(op_id):
     cmd = get_int(0)
-      return conn_successful
+    if cmd == 1:
+      q = get_q(0)
+      speed = get_float(6)
+      acceleration = get_float(7)
+      time = get_float(8)
+      lookahead_time = get_float(9)
+      gain = get_float(10)
     end
   end
 
