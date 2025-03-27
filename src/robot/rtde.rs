@@ -1,5 +1,5 @@
 use core::str;
-use std::net::{IpAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use strum::IntoEnumIterator;
@@ -7,6 +7,8 @@ use tokio::{
 	io::{self, AsyncReadExt, AsyncWriteExt},
 	net::TcpStream,
 };
+
+use crate::robot::callback::CALLBACK_PORT;
 
 use super::{
 	commands::RDTECommand,
@@ -32,12 +34,17 @@ impl RtdeClient {
 		Ok(local_addr.ip())
 	}
 
-	pub async fn setup(&mut self) -> io::Result<()> {
+	pub async fn setup(&mut self, callback_addr: Ipv4Addr) -> io::Result<()> {
 		self.request_protocol().await?;
 		self.setup_recipes().await?;
 		// probably only need it for output stuff? probably don't want it anyways
 		// self.start().await?;
-		todo!()
+		self.send(Recipe::Connection {
+			ip: callback_addr.to_bits(),
+			port: CALLBACK_PORT,
+		})
+		.await?;
+		Ok(())
 	}
 
 	async fn request_protocol(&mut self) -> io::Result<()> {
@@ -48,7 +55,8 @@ impl RtdeClient {
 		self.conn.write_all(&bytes).await?;
 		let mut res_buff = [0u8; 4];
 		self.conn.read_exact(&mut res_buff).await?;
-		if res_buff[1] != 1 {
+		if res_buff[3] != 1 {
+			eprintln!("{res_buff:#?}");
 			panic!("UR RTDE protocol didn't accept version {PROTOCOL_VERSION}");
 		}
 		Ok(())

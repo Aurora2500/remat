@@ -77,6 +77,7 @@ def event_loop():
     octet_2 = list_to_octet(addr, 16) 
     octet_3 = list_to_octet(addr, 8) 
     octet_4 = list_to_octet(addr, 0) 
+    textmsg("Attempting to connect")
     ip_addr = to_str(octet_1) + "." + to_str(octet_2) + "." + to_str(octet_3) + "." + to_str(octet_4)
     conn_successful = socket_open(ip_addr, port, "async_callback")
     if not conn_successful:
@@ -86,7 +87,6 @@ def event_loop():
   end
 
   thread servoj_thread():
-
     servoj(q, acceleration, speed, time, lookahead_time, gain)
   end
 
@@ -99,6 +99,7 @@ def event_loop():
       time = get_float(8)
       lookahead_time = get_float(9)
       gain = get_float(10)
+      movej(q, acceleration, speed, time, 0, 0)
     end
   end
 

@@ -32,7 +32,9 @@ impl Robot {
 			.map(|addr| addr.ip())
 			.expect("Bad socket addr");
 		let mut rtde = RtdeClient::new(addr).await?;
+		println!("RTDE created");
 		let mut script = ScriptClient::new(addr).await?;
+		println!("Script created");
 		let callback_addr = match callback_addr {
 			Some(addr) => addr,
 			None => {
@@ -48,9 +50,14 @@ impl Robot {
 			}
 		};
 		let callback = CallbackServer::new(callback_addr).await?;
-		rtde.setup().await?;
+		println!("Callback server created");
+		rtde.setup(callback_addr).await?;
+		println!("RTDE Set up");
 		script.send_script().await?;
+		println!("Script set up");
 		let callback = callback.accept().await?;
+		println!("Callback accepted");
+
 		Ok(Self {
 			rtde,
 			script,
