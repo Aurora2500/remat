@@ -6,7 +6,7 @@ use tokio::{
 };
 
 const EVENT_LOOP_SRC: &'static str = include_str!("event_loop.urscript");
-const SCRIPT_PORT: u16 = 30002;
+const SCRIPT_PORT: u16 = 30001;
 
 pub struct ScriptClient {
 	conn: TcpStream,

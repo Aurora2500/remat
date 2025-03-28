@@ -1,13 +1,13 @@
 use std::{fs::File, io::Write, net::Ipv4Addr};
 
 use camera::{Brightness, ExposureAuto, Gain, Gamma};
-use tokio::runtime::Runtime;
 
 mod camera;
 mod robot;
 mod video;
 
-fn main() {
+#[tokio::main]
+async fn main() {
 	// let mut cam = camera::Camera::new("/dev/video0");
 	// cam.set::<ExposureAuto>(3);
 	// // cam.set::<Exposure>(166);
@@ -27,14 +27,11 @@ fn main() {
 	let addr = "169.254.129.110:0";
 	let callback_addr = Some(Ipv4Addr::new(169, 254, 129, 50));
 
-	let rt = Runtime::new().unwrap();
-	rt.block_on(async move {
-		let mut r = robot::Robot::start_with_addr(addr, callback_addr)
-			.await
-			.expect("Failed to connect to robot");
-		println!("Connected!");
-		r.servo_j([-1.5, -1.5, -1.5, 0., 1.5, 0.], 0.8, 0.1, 0.1, 0.1, 300.0)
-			.await
-			.expect("Failed ServoJ");
-	})
+	let mut r = robot::Robot::start_with_addr(addr, callback_addr)
+		.await
+		.expect("Failed to connect to robot");
+	println!("Connected!");
+	r.servo_j([-1.5, -1.5, -1.5, 0., 1.5, 0.], 0.8, 0.1, 0.1, 0.1, 300.0)
+		.await
+		.expect("Failed ServoJ");
 }
