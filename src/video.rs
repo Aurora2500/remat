@@ -1,9 +1,18 @@
-use std::{ffi::c_void, fs::File, mem, num::NonZeroUsize, os::fd::AsRawFd, ptr::NonNull, slice};
+use std::{
+	ffi::c_void,
+	io, mem,
+	num::NonZeroUsize,
+	os::fd::{AsFd, AsRawFd, OwnedFd},
+	ptr::NonNull,
+	slice,
+};
 
 use nix::{
+	errno::Errno,
 	ioctl_read_bad, ioctl_write_ptr_bad,
 	sys::mman::{mmap, munmap, MapFlags, ProtFlags},
 };
+use tokio::io::unix::AsyncFd;
 use v4l2_sys::{
 	v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE, v4l2_buffer, v4l2_control,
 	v4l2_field_V4L2_FIELD_NONE, v4l2_format, v4l2_memory_V4L2_MEMORY_MMAP, v4l2_requestbuffers,
@@ -66,7 +75,7 @@ impl VideoFormat {
 		self
 	}
 
-	pub fn apply(&self, dev: &File) {
+	pub fn apply(&self, dev: &impl AsRawFd) {
 		unsafe {
 			set_v4l2_format(dev.as_raw_fd(), &self.0).expect("Failed applying v4l2 format");
 		}
@@ -79,61 +88,33 @@ impl Default for VideoFormat {
 	}
 }
 
-pub struct FrameBufferPool {
-	frame_buffers: Vec<FrameBuffer>,
-	curr_idx: usize,
+pub struct FrameBuffer {
+	data: *mut u8,
+	length: usize,
+	idx: u32,
 }
 
-impl FrameBufferPool {
-	pub fn create(dev: &File, count: u32) -> Self {
+impl FrameBuffer {
+	pub fn new_pool(dev: &impl AsFd, count: u32) -> io::Result<Box<[Self]>> {
 		let mut req: v4l2_requestbuffers = unsafe { mem::zeroed() };
 		req.count = count;
 		req.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
 		req.memory = v4l2_memory_V4L2_MEMORY_MMAP;
 		unsafe {
-			set_v4l2_reqbufs(dev.as_raw_fd(), &req).expect("Failed setting request buffers");
+			set_v4l2_reqbufs(dev.as_fd().as_raw_fd(), &req)
+				.expect("Failed setting request buffers");
 		}
-		let frame_buffers = (0..count)
+		(0..count)
 			.map(|idx| FrameBuffer::create(dev, idx))
-			.collect();
-
-		Self {
-			frame_buffers,
-			curr_idx: 0,
-		}
+			.collect()
 	}
 
-	pub fn capture(&mut self, dev: &File) -> &[u8] {
-		let idx = self.curr_idx;
-		self.curr_idx += 1;
-		if self.curr_idx >= self.frame_buffers.len() {
-			self.curr_idx = 0;
-		}
-		let mut buf: v4l2_buffer = unsafe { mem::zeroed() };
-		buf.index = idx as u32;
-		buf.memory = v4l2_memory_V4L2_MEMORY_MMAP;
-		buf.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
-		unsafe {
-			v4l2_queue(dev.as_raw_fd(), &buf).expect("Failed to queue buffer");
-			v4l2_dequeue(dev.as_raw_fd(), &mut buf).expect("Failed to dequeue buffer");
-		}
-		let fb = &self.frame_buffers[idx];
-		unsafe { slice::from_raw_parts(fb.data, buf.bytesused as usize) }
-	}
-}
-
-pub struct FrameBuffer {
-	data: *mut u8,
-	length: usize,
-}
-
-impl FrameBuffer {
-	fn create(dev: &File, index: u32) -> Self {
+	fn create(dev: &impl AsFd, index: u32) -> io::Result<Self> {
 		let mut buf: v4l2_buffer = unsafe { mem::zeroed() };
 		buf.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
 		buf.memory = v4l2_memory_V4L2_MEMORY_MMAP;
 		buf.index = index;
-		unsafe { create_v4l2_buf(dev.as_raw_fd(), &buf).expect("Failed creating buffer") };
+		unsafe { create_v4l2_buf(dev.as_fd().as_raw_fd(), &buf)? };
 		let length = buf.length as usize;
 		let data = unsafe {
 			mmap(
@@ -147,7 +128,37 @@ impl FrameBuffer {
 			.expect("Failed mmap for buffer")
 			.as_ptr() as *mut u8
 		};
-		return Self { length, data };
+		Ok(Self {
+			length,
+			data,
+			idx: index,
+		})
+	}
+
+	pub async fn capture(&mut self, dev: &mut AsyncFd<OwnedFd>) -> io::Result<&[u8]> {
+		let mut buf: v4l2_buffer = unsafe { mem::zeroed() };
+		buf.index = self.idx;
+		buf.memory = v4l2_memory_V4L2_MEMORY_MMAP;
+		buf.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		unsafe {
+			v4l2_queue(dev.as_raw_fd(), &buf)?;
+		}
+		let buf = loop {
+			let mut guard = dev.readable().await?;
+			let mut buf: v4l2_buffer = unsafe { mem::zeroed() };
+			buf.memory = v4l2_memory_V4L2_MEMORY_MMAP;
+			buf.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
+			let ret = unsafe { v4l2_dequeue(dev.as_raw_fd(), &mut buf) };
+			match ret {
+				Ok(_) => break buf,
+				Err(Errno::EAGAIN) => {
+					guard.clear_ready();
+					continue;
+				}
+				Err(e) => return Err(io::Error::from_raw_os_error(e as i32)),
+			}
+		};
+		unsafe { Ok(slice::from_raw_parts(self.data, buf.bytesused as usize)) }
 	}
 }
 
@@ -163,21 +174,21 @@ impl Drop for FrameBuffer {
 	}
 }
 
-pub fn enable_video_stream(dev: &File) {
+pub fn enable_video_stream(dev: &impl AsRawFd) {
 	unsafe {
 		let ty = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
 		enable_v4l2_stream(dev.as_raw_fd(), &ty).expect("Failed turning on stream");
 	}
 }
 
-pub fn set_dev_settings(dev: &File, setting: u32, value: i32) {
+pub fn set_dev_settings(dev: &impl AsRawFd, setting: u32, value: i32) {
 	let c: v4l2_control = v4l2_control { id: setting, value };
 	unsafe {
 		v4l2_set_ctrl(dev.as_raw_fd(), &c).expect("Failed updating settings");
 	}
 }
 
-pub fn get_dev_settings(dev: &File, setting: u32) -> i32 {
+pub fn get_dev_settings(dev: &impl AsRawFd, setting: u32) -> i32 {
 	let mut c: v4l2_control = v4l2_control {
 		id: setting,
 		value: 0,

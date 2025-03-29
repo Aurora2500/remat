@@ -1,14 +1,26 @@
-use std::{fs::File, marker::PhantomData, path::Path};
+#![allow(dead_code)]
+use std::{
+	io,
+	marker::PhantomData,
+	os::fd::{FromRawFd, OwnedFd},
+};
+
+use tokio::io::unix::AsyncFd;
+
+use nix::{
+	fcntl::{open, OFlag},
+	sys::stat::Mode,
+	NixPath,
+};
 
 use crate::video::{
-	enable_video_stream, get_dev_settings, set_dev_settings, FrameBufferPool, VideoFormat,
+	enable_video_stream, get_dev_settings, set_dev_settings, FrameBuffer, VideoFormat,
 	VideoPixelFormat, BLACKLIGHT_COMPENSATION, BRIGHTNESS, CONTRAST, EXPOSURE, EXPOSURE_AUTO, GAIN,
 	GAMMA, HUE, MJPEG_FMT, SATURATION, WHITE_BALANCE, WHITE_BALANCE_AUTO,
 };
 
 pub struct Camera {
-	dev: File,
-	frame_buffers: FrameBufferPool,
+	dev: AsyncFd<OwnedFd>,
 }
 
 pub trait CameraSetting {
@@ -16,12 +28,11 @@ pub trait CameraSetting {
 }
 
 impl Camera {
-	pub fn new<P: AsRef<Path>>(path: P) -> Self {
-		let dev = File::options()
-			.read(true)
-			.write(true)
-			.open(path)
-			.expect("Failed to open device");
+	pub async fn new<P: NixPath + ?Sized>(path: &P) -> io::Result<(Self, Box<[FrameBuffer]>)> {
+		let fd = open(path, OFlag::O_RDWR | OFlag::O_NONBLOCK, Mode::empty())?;
+		// SAFETY: the fd was opened right above, returning if it failed, so this should be safe
+		let dev = unsafe { OwnedFd::from_raw_fd(fd) };
+		let dev = AsyncFd::new(dev)?;
 		let num_buffers = 4;
 
 		let fmt = VideoFormat::new()
@@ -33,15 +44,19 @@ impl Camera {
 			});
 		fmt.apply(&dev);
 
-		let frame_buffers = FrameBufferPool::create(&dev, num_buffers);
+		let buffers = FrameBuffer::new_pool(&dev, num_buffers)?;
 
 		enable_video_stream(&dev);
 
-		Self { dev, frame_buffers }
+		Ok((Self { dev }, buffers))
 	}
 
-	pub fn capture_frame(&mut self) -> &[u8] {
-		self.frame_buffers.capture(&self.dev)
+	pub async fn capture_frame<'fb>(
+		&mut self,
+		buffer: &'fb mut FrameBuffer,
+	) -> io::Result<&'fb [u8]> {
+		// self.frame_buffers.capture(&self.dev)
+		buffer.capture(&mut self.dev).await
 	}
 
 	pub fn set<T: CameraSetting>(&mut self, value: i32) {
