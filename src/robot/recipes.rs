@@ -1,4 +1,5 @@
 use bytes::{BufMut, BytesMut};
+use color_eyre::eyre::{Ok, Result};
 use std::fmt::{Display, Write};
 use strum_macros::EnumIter;
 
@@ -51,6 +52,7 @@ impl Recipe {
 	}
 }
 
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, EnumIter)]
 pub enum RecipeId {
 	Connection = 1,
@@ -73,7 +75,7 @@ macro_rules! write_regs {
 }
 
 impl RecipeId {
-	pub fn setup(self, bytes: &mut BytesMut) {
+	pub fn setup(self, bytes: &mut BytesMut) -> Result<()> {
 		match self {
 			Self::Connection => {
 				write_regs!(bytes, IntReg(0), IntReg(1))
@@ -82,12 +84,7 @@ impl RecipeId {
 				write_regs!(
 					bytes,
 					IntReg(0),
-					DoubleReg(0),
-					DoubleReg(1),
-					DoubleReg(2),
-					DoubleReg(3),
-					DoubleReg(4),
-					DoubleReg(5),
+					Vec6D(0),
 					DoubleReg(6),
 					DoubleReg(7),
 					DoubleReg(8),
@@ -95,8 +92,8 @@ impl RecipeId {
 					DoubleReg(10),
 				)
 			}
-		}
-		.expect("Failed to write recipe")
+		}?;
+		Ok(())
 	}
 }
 
@@ -116,6 +113,22 @@ impl Display for DoubleReg {
 			f,
 			"input_double_register_{}",
 			DOUBLE_REGISTER_OFFSET + self.0
+		)
+	}
+}
+
+struct Vec6D(u8);
+
+impl Display for Vec6D {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write_regs!(
+			f,
+			DoubleReg(self.0 + 0),
+			DoubleReg(self.0 + 1),
+			DoubleReg(self.0 + 2),
+			DoubleReg(self.0 + 3),
+			DoubleReg(self.0 + 4),
+			DoubleReg(self.0 + 5)
 		)
 	}
 }

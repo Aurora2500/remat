@@ -1,3 +1,4 @@
+#[repr(u8)]
 pub enum RDTECommand {
 	RequestProtocolVersion = 86,
 	GetURControlVersion = 118,

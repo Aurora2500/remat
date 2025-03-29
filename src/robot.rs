@@ -1,11 +1,10 @@
+#![allow(dead_code)]
 use std::net::{IpAddr, Ipv4Addr};
 
 use callback::{CallbackClient, CallbackServer};
+use color_eyre::eyre::{bail, Context, OptionExt, Result};
 use rtde::RtdeClient;
-use tokio::{
-	io::{self},
-	net::{lookup_host, ToSocketAddrs},
-};
+use tokio::net::{lookup_host, ToSocketAddrs};
 
 use script::ScriptClient;
 
@@ -25,12 +24,12 @@ impl Robot {
 	pub async fn start_with_addr<A: ToSocketAddrs>(
 		addr: A,
 		callback_addr: Option<Ipv4Addr>,
-	) -> io::Result<Self> {
+	) -> Result<Self> {
 		let addr = lookup_host(addr)
 			.await?
 			.next()
 			.map(|addr| addr.ip())
-			.expect("Bad socket addr");
+			.ok_or_eyre("Bad IP Address")?;
 		let mut rtde = RtdeClient::new(addr).await?;
 		println!("RTDE created");
 		let mut script = ScriptClient::new(addr).await?;
@@ -40,11 +39,11 @@ impl Robot {
 			None => {
 				let callback_addr = rtde
 					.get_local_addr()
-					.expect("Failed getting rtde local addr");
+					.context("Failed to get local IP address")?;
 				match callback_addr {
 					IpAddr::V4(x) => x,
 					IpAddr::V6(x) => {
-						panic!("Connected via IPV6 addr {x}, but callback requires IPV4 addr!")
+						bail!("Connected via IPV6 addr {x}, but callback requires IPV4 addr!")
 					}
 				}
 			}
@@ -73,7 +72,7 @@ impl Robot {
 		time: f64,
 		lookahead_time: f64,
 		gain: f64,
-	) -> io::Result<()> {
+	) -> Result<()> {
 		self.rtde
 			.send(recipes::Recipe::ServoJ {
 				q,

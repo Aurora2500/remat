@@ -164,13 +164,15 @@ impl FrameBuffer {
 
 impl Drop for FrameBuffer {
 	fn drop(&mut self) {
-		unsafe {
+		let res = unsafe {
 			munmap(
 				NonNull::<c_void>::new_unchecked(self.data as *mut c_void),
 				self.length,
 			)
-			.expect("munmap failed");
 		};
+		if let Err(e) = res {
+			eprintln!("Munmap error: {e}");
+		}
 	}
 }
 

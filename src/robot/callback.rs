@@ -1,7 +1,8 @@
 use std::net::Ipv4Addr;
 
+use color_eyre::eyre::Result;
 use tokio::{
-	io::{self, AsyncReadExt, AsyncWriteExt},
+	io::{AsyncReadExt, AsyncWriteExt},
 	net::{TcpListener, TcpStream},
 	sync::{
 		mpsc::{channel, Receiver, Sender},
@@ -17,12 +18,12 @@ pub struct CallbackServer {
 }
 
 impl CallbackServer {
-	pub async fn new(addr: Ipv4Addr) -> io::Result<Self> {
+	pub async fn new(addr: Ipv4Addr) -> Result<Self> {
 		let listener = TcpListener::bind((addr, CALLBACK_PORT)).await?;
 		Ok(Self { listener })
 	}
 
-	pub async fn accept(self) -> io::Result<CallbackClient> {
+	pub async fn accept(self) -> Result<CallbackClient> {
 		let (conn, _) = self.listener.accept().await?;
 		Ok(CallbackClient::new(conn))
 	}
