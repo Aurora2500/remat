@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 bytes = "1.10.1"
 color-eyre = "0.6.3"
+ffmpeg-sys-next = "7.1.0"
 nix = { version = "0.29.0", features = ["fs", "ioctl", "mman", "net"] }
 strum = { version = "0.27.1", features = ["strum_macros"] }
 strum_macros = "0.27.1"

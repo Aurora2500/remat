@@ -1,4 +1,7 @@
 #![allow(dead_code)]
+
+mod internal;
+
 use std::{
 	io,
 	marker::PhantomData,
@@ -13,7 +16,7 @@ use nix::{
 	NixPath,
 };
 
-use crate::video::{
+use internal::{
 	enable_video_stream, get_dev_settings, set_dev_settings, FrameBuffer, VideoFormat,
 	VideoPixelFormat, BLACKLIGHT_COMPENSATION, BRIGHTNESS, CONTRAST, EXPOSURE, EXPOSURE_AUTO, GAIN,
 	GAMMA, HUE, MJPEG_FMT, SATURATION, WHITE_BALANCE, WHITE_BALANCE_AUTO,
@@ -55,7 +58,6 @@ impl Camera {
 		&mut self,
 		buffer: &'fb mut FrameBuffer,
 	) -> io::Result<&'fb [u8]> {
-		// self.frame_buffers.capture(&self.dev)
 		buffer.capture(&mut self.dev).await
 	}
 

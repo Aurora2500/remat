@@ -1,211 +1,119 @@
 use std::{
-	ffi::c_void,
-	io, mem,
-	num::NonZeroUsize,
-	os::fd::{AsFd, AsRawFd, OwnedFd},
-	ptr::NonNull,
-	slice,
+	ffi::CString,
+	mem,
+	ptr::{null, null_mut},
 };
 
-use nix::{
-	errno::Errno,
-	ioctl_read_bad, ioctl_write_ptr_bad,
-	sys::mman::{mmap, munmap, MapFlags, ProtFlags},
-};
-use tokio::io::unix::AsyncFd;
-use v4l2_sys::{
-	v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE, v4l2_buffer, v4l2_control,
-	v4l2_field_V4L2_FIELD_NONE, v4l2_format, v4l2_memory_V4L2_MEMORY_MMAP, v4l2_requestbuffers,
-	V4L2_CID_BACKLIGHT_COMPENSATION, V4L2_CID_BRIGHTNESS, V4L2_CID_CONTRAST,
-	V4L2_CID_EXPOSURE_ABSOLUTE, V4L2_CID_EXPOSURE_AUTO, V4L2_CID_GAIN, V4L2_CID_GAMMA,
-	V4L2_CID_HUE, V4L2_CID_SATURATION, V4L2_CID_WHITE_BALANCE_TEMPERATURE, VIDIOC_DQBUF,
-	VIDIOC_QBUF, VIDIOC_QUERYBUF, VIDIOC_REQBUFS, VIDIOC_STREAMON, VIDIOC_S_CTRL, VIDIOC_S_FMT,
+use ffmpeg_sys_next::{
+	av_frame_alloc, av_frame_free, av_frame_get_buffer, av_frame_make_writable, av_init_packet,
+	av_interleaved_write_frame, av_log_set_level, av_packet_unref, av_write_trailer,
+	avcodec_alloc_context3, avcodec_find_encoder, avcodec_free_context, avcodec_open2,
+	avcodec_parameters_from_context, avcodec_receive_packet, avcodec_send_frame,
+	avdevice_register_all, avformat_alloc_output_context2, avformat_free_context,
+	avformat_network_deinit, avformat_network_init, avformat_new_stream, avformat_write_header,
+	avio_close, avio_open, memset, AVFormatContext, AVPacket, AVPixelFormat, AVRational,
+	AVIO_FLAG_WRITE, AV_LOG_VERBOSE,
 };
 
-pub const EXPOSURE: u32 = V4L2_CID_EXPOSURE_ABSOLUTE;
-pub const EXPOSURE_AUTO: u32 = V4L2_CID_EXPOSURE_AUTO;
-pub const GAIN: u32 = V4L2_CID_GAIN;
-pub const GAMMA: u32 = V4L2_CID_GAMMA;
-pub const BRIGHTNESS: u32 = V4L2_CID_BRIGHTNESS;
-pub const CONTRAST: u32 = V4L2_CID_CONTRAST;
-pub const HUE: u32 = V4L2_CID_HUE;
-pub const SATURATION: u32 = V4L2_CID_SATURATION;
-pub const WHITE_BALANCE: u32 = V4L2_CID_WHITE_BALANCE_TEMPERATURE;
-pub const BLACKLIGHT_COMPENSATION: u32 = V4L2_CID_BACKLIGHT_COMPENSATION;
-pub const WHITE_BALANCE_AUTO: u32 = V4L2_CID_WHITE_BALANCE_TEMPERATURE;
+pub struct Video {}
 
-#[derive(Debug, Clone, Copy)]
-pub struct VideoPixelFormat {
-	pub width: u32,
-	pub height: u32,
-	// field: u32,
-	pub format: u32,
-}
-
-pub struct VideoFormat(pub v4l2_format);
-
-pub const MJPEG_FMT: u32 = u32::from_ne_bytes(*b"MJPG").swap_bytes();
-
-impl VideoFormat {
+impl Video {
 	pub fn new() -> Self {
-		Self::default()
-	}
-
-	pub fn set_type(mut self, ty: u32) -> Self {
-		self.0.type_ = ty;
-		self
-	}
-
-	pub fn set_video_capture_type(self) -> Self {
-		self.set_type(v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE)
-	}
-
-	pub fn set_pix_format(
-		mut self,
-		VideoPixelFormat {
-			width,
-			height,
-			format,
-		}: VideoPixelFormat,
-	) -> Self {
-		self.0.fmt.pix.width = width;
-		self.0.fmt.pix.height = height;
-		self.0.fmt.pix.pixelformat = format;
-		self.0.fmt.pix.field = v4l2_field_V4L2_FIELD_NONE;
-		self
-	}
-
-	pub fn apply(&self, dev: &impl AsRawFd) {
 		unsafe {
-			set_v4l2_format(dev.as_raw_fd(), &self.0).expect("Failed applying v4l2 format");
+			av_log_set_level(AV_LOG_VERBOSE);
+			avdevice_register_all();
+			avformat_network_init();
+			Self {}
 		}
 	}
 }
 
-impl Default for VideoFormat {
-	fn default() -> Self {
-		Self(unsafe { mem::zeroed() })
-	}
-}
-
-pub struct FrameBuffer {
-	data: *mut u8,
-	length: usize,
-	idx: u32,
-}
-
-impl FrameBuffer {
-	pub fn new_pool(dev: &impl AsFd, count: u32) -> io::Result<Box<[Self]>> {
-		let mut req: v4l2_requestbuffers = unsafe { mem::zeroed() };
-		req.count = count;
-		req.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
-		req.memory = v4l2_memory_V4L2_MEMORY_MMAP;
-		unsafe {
-			set_v4l2_reqbufs(dev.as_fd().as_raw_fd(), &req)
-				.expect("Failed setting request buffers");
-		}
-		(0..count)
-			.map(|idx| FrameBuffer::create(dev, idx))
-			.collect()
-	}
-
-	fn create(dev: &impl AsFd, index: u32) -> io::Result<Self> {
-		let mut buf: v4l2_buffer = unsafe { mem::zeroed() };
-		buf.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
-		buf.memory = v4l2_memory_V4L2_MEMORY_MMAP;
-		buf.index = index;
-		unsafe { create_v4l2_buf(dev.as_fd().as_raw_fd(), &buf)? };
-		let length = buf.length as usize;
-		let data = unsafe {
-			mmap(
-				None,
-				NonZeroUsize::new_unchecked(length),
-				ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-				MapFlags::MAP_SHARED,
-				dev,
-				buf.m.offset.into(),
-			)
-			.expect("Failed mmap for buffer")
-			.as_ptr() as *mut u8
-		};
-		Ok(Self {
-			length,
-			data,
-			idx: index,
-		})
-	}
-
-	pub async fn capture(&mut self, dev: &mut AsyncFd<OwnedFd>) -> io::Result<&[u8]> {
-		let mut buf: v4l2_buffer = unsafe { mem::zeroed() };
-		buf.index = self.idx;
-		buf.memory = v4l2_memory_V4L2_MEMORY_MMAP;
-		buf.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
-		unsafe {
-			v4l2_queue(dev.as_raw_fd(), &buf)?;
-		}
-		let buf = loop {
-			let mut guard = dev.readable().await?;
-			let mut buf: v4l2_buffer = unsafe { mem::zeroed() };
-			buf.memory = v4l2_memory_V4L2_MEMORY_MMAP;
-			buf.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
-			let ret = unsafe { v4l2_dequeue(dev.as_raw_fd(), &mut buf) };
-			match ret {
-				Ok(_) => break buf,
-				Err(Errno::EAGAIN) => {
-					guard.clear_ready();
-					continue;
-				}
-				Err(e) => return Err(io::Error::from_raw_os_error(e as i32)),
-			}
-		};
-		unsafe { Ok(slice::from_raw_parts(self.data, buf.bytesused as usize)) }
-	}
-}
-
-impl Drop for FrameBuffer {
+impl Drop for Video {
 	fn drop(&mut self) {
-		let res = unsafe {
-			munmap(
-				NonNull::<c_void>::new_unchecked(self.data as *mut c_void),
-				self.length,
-			)
-		};
-		if let Err(e) = res {
-			eprintln!("Munmap error: {e}");
+		unsafe {
+			avformat_network_deinit();
 		}
 	}
 }
 
-pub fn enable_video_stream(dev: &impl AsRawFd) {
-	unsafe {
-		let ty = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
-		enable_v4l2_stream(dev.as_raw_fd(), &ty).expect("Failed turning on stream");
-	}
+pub struct Encoder {
+	fmt_ctx: *mut AVFormatContext,
 }
 
-pub fn set_dev_settings(dev: &impl AsRawFd, setting: u32, value: i32) {
-	let c: v4l2_control = v4l2_control { id: setting, value };
+pub fn test() {
 	unsafe {
-		v4l2_set_ctrl(dev.as_raw_fd(), &c).expect("Failed updating settings");
+		let mut format_ctx: *mut AVFormatContext = null_mut();
+		avformat_alloc_output_context2(
+			&mut format_ctx,
+			null(),
+			c"mp4".as_ptr(),
+			c"output.mp4".as_ptr(),
+		);
+
+		let codec = avcodec_find_encoder(ffmpeg_sys_next::AVCodecID::AV_CODEC_ID_H264);
+		if codec.is_null() {
+			panic!("Failed getting codec");
+		}
+		let video_stream = avformat_new_stream(format_ctx, codec);
+		if video_stream.is_null() {
+			panic!("Failed getting video stream");
+		}
+		let mut codec_ctx = avcodec_alloc_context3(codec);
+		if codec_ctx.is_null() {
+			panic!("Failed getting codec context");
+		}
+
+		(*codec_ctx).width = 1920;
+		(*codec_ctx).height = 1080;
+		(*codec_ctx).pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV420P;
+		(*codec_ctx).time_base = AVRational { num: 1, den: 25 };
+		(*codec_ctx).framerate = AVRational { num: 25, den: 1 };
+		(*codec_ctx).gop_size = 10;
+		(*codec_ctx).max_b_frames = 1;
+
+		avcodec_open2(codec_ctx, codec, null_mut());
+		avcodec_parameters_from_context((*video_stream).codecpar, codec_ctx);
+
+		avio_open(
+			&mut (*format_ctx).pb,
+			c"output.mp4".as_ptr(),
+			AVIO_FLAG_WRITE,
+		);
+		avformat_write_header(format_ctx, null_mut());
+
+		let mut frame = av_frame_alloc();
+		(*frame).width = 1920;
+		(*frame).height = 1080;
+		(*frame).format = AVPixelFormat::AV_PIX_FMT_YUV420P as i32;
+		av_frame_get_buffer(frame, 32);
+
+		for i in 0..1000 {
+			av_frame_make_writable(frame);
+			memset((*frame).data[0].cast(), i * 2, 1920 * 1080);
+			memset((*frame).data[1].cast(), 128, 1920 * 1080 / 4);
+			memset((*frame).data[2].cast(), 128, 1920 * 1080 / 4);
+			(*frame).pts = i as i64;
+
+			avcodec_send_frame(codec_ctx, frame);
+			let mut packet: AVPacket = mem::zeroed();
+			av_init_packet(&mut packet);
+			while avcodec_receive_packet(codec_ctx, &mut packet) == 0 {
+				av_interleaved_write_frame(format_ctx, &mut packet);
+				av_packet_unref(&mut packet);
+			}
+		}
+
+		avcodec_send_frame(codec_ctx, null_mut());
+		let mut packet: AVPacket = mem::zeroed();
+		while avcodec_receive_packet(codec_ctx, &mut packet) == 0 {
+			av_interleaved_write_frame(format_ctx, &mut packet);
+			av_packet_unref(&mut packet);
+		}
+
+		av_write_trailer(format_ctx);
+		avcodec_free_context(&mut codec_ctx);
+		av_frame_free(&mut frame);
+		avio_close((*format_ctx).pb);
+		avformat_free_context(format_ctx);
 	}
 }
-
-pub fn get_dev_settings(dev: &impl AsRawFd, setting: u32) -> i32 {
-	let mut c: v4l2_control = v4l2_control {
-		id: setting,
-		value: 0,
-	};
-	unsafe {
-		v4l2_get_ctrl(dev.as_raw_fd(), &mut c).expect("Failed getting settings");
-	}
-	c.value
-}
-
-ioctl_write_ptr_bad!(set_v4l2_format, VIDIOC_S_FMT, v4l2_format);
-ioctl_write_ptr_bad!(set_v4l2_reqbufs, VIDIOC_REQBUFS, v4l2_requestbuffers);
-ioctl_write_ptr_bad!(create_v4l2_buf, VIDIOC_QUERYBUF, v4l2_buffer);
-ioctl_write_ptr_bad!(enable_v4l2_stream, VIDIOC_STREAMON, u32);
-ioctl_write_ptr_bad!(v4l2_queue, VIDIOC_QBUF, v4l2_buffer);
-ioctl_read_bad!(v4l2_dequeue, VIDIOC_DQBUF, v4l2_buffer);
-ioctl_write_ptr_bad!(v4l2_set_ctrl, VIDIOC_S_CTRL, v4l2_control);
-ioctl_read_bad!(v4l2_get_ctrl, VIDIOC_S_CTRL, v4l2_control);
