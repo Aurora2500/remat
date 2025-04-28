@@ -17,10 +17,15 @@ use nix::{
 };
 
 use internal::{
-	enable_video_stream, get_dev_settings, set_dev_settings, FrameBuffer, VideoFormat,
+	enable_video_stream, get_dev_settings, set_dev_settings, FrameBufferPool, VideoFormat,
 	VideoPixelFormat, BLACKLIGHT_COMPENSATION, BRIGHTNESS, CONTRAST, EXPOSURE, EXPOSURE_AUTO, GAIN,
 	GAMMA, HUE, MJPEG_FMT, SATURATION, WHITE_BALANCE, WHITE_BALANCE_AUTO,
 };
+
+pub struct CameraStream<'cam, 'buf> {
+	cam: &'cam mut Camera,
+	buffer: &'buf mut FrameBufferPool,
+}
 
 pub struct Camera {
 	dev: AsyncFd<OwnedFd>,
@@ -31,7 +36,7 @@ pub trait CameraSetting {
 }
 
 impl Camera {
-	pub async fn new<P: NixPath + ?Sized>(path: &P) -> io::Result<(Self, Box<[FrameBuffer]>)> {
+	pub async fn new<P: NixPath + ?Sized>(path: &P) -> io::Result<(Self, FrameBufferPool)> {
 		let fd = open(path, OFlag::O_RDWR | OFlag::O_NONBLOCK, Mode::empty())?;
 		// SAFETY: the fd was opened right above, returning if it failed, so this should be safe
 		let dev = unsafe { OwnedFd::from_raw_fd(fd) };
@@ -47,7 +52,7 @@ impl Camera {
 			});
 		fmt.apply(&dev);
 
-		let buffers = FrameBuffer::new_pool(&dev, num_buffers)?;
+		let buffers = FrameBufferPool::new(&dev, num_buffers)?;
 
 		enable_video_stream(&dev);
 
@@ -56,9 +61,17 @@ impl Camera {
 
 	pub async fn capture_frame<'fb>(
 		&mut self,
-		buffer: &'fb mut FrameBuffer,
+		buffer: &'fb mut FrameBufferPool,
 	) -> io::Result<&'fb [u8]> {
 		buffer.capture(&mut self.dev).await
+	}
+
+	pub fn stream<'cam, 'buf>(
+		&'cam mut self,
+		buffer: &'buf mut FrameBufferPool,
+	) -> io::Result<CameraStream<'cam, 'buf>> {
+		buffer.enqueue(&mut self.dev)?;
+		Ok(CameraStream { cam: self, buffer })
 	}
 
 	pub fn set<T: CameraSetting>(&mut self, value: i32) {
@@ -67,6 +80,16 @@ impl Camera {
 
 	pub fn get<T: CameraSetting>(&self) -> i32 {
 		get_dev_settings(&self.dev, T::ID)
+	}
+}
+
+impl CameraStream<'_, '_> {
+	pub async fn get_frame(&mut self) -> io::Result<&[u8]> {
+		self.buffer.dequeue(&mut self.cam.dev).await
+	}
+
+	pub async fn stop(self) -> io::Result<()> {
+		self.buffer.dequeue_all(&mut self.cam.dev).await
 	}
 }
 

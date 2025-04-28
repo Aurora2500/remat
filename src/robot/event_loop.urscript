@@ -99,6 +99,14 @@ def event_loop():
       time = get_float(8)
       lookahead_time = get_float(9)
       gain = get_float(10)
+      servoj(q, acceleration, speed, time, 0, 0)
+    elif cmd == 2:
+      q = get_q(0)
+      speed = get_float(6)
+      acceleration = get_float(7)
+      time = get_float(8)
+      lookahead_time = get_float(9)
+      gain = get_float(10)
       movej(q, acceleration, speed, time, 0, 0)
     end
   end

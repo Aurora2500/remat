@@ -74,7 +74,32 @@ impl Robot {
 		gain: f64,
 	) -> Result<()> {
 		self.rtde
-			.send(recipes::Recipe::ServoJ {
+			.send(recipes::Recipe::JCommand {
+				command: 1,
+				q,
+				speed,
+				acceleration,
+				time,
+				lookahead_time,
+				gain,
+			})
+			.await?;
+		self.callback.non_awaitable().await;
+		Ok(())
+	}
+
+	pub async fn move_j(
+		&mut self,
+		q: [f64; 6],
+		speed: f64,
+		acceleration: f64,
+		time: f64,
+		lookahead_time: f64,
+		gain: f64,
+	) -> Result<()> {
+		self.rtde
+			.send(recipes::Recipe::JCommand {
+				command: 2,
 				q,
 				speed,
 				acceleration,

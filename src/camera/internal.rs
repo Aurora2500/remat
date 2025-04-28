@@ -88,14 +88,18 @@ impl Default for VideoFormat {
 	}
 }
 
-pub struct FrameBuffer {
-	data: *mut u8,
-	length: usize,
+pub struct FrameBufferPool {
+	pool: Box<[FrameBuffer]>,
 	idx: u32,
 }
 
-impl FrameBuffer {
-	pub fn new_pool(dev: &impl AsFd, count: u32) -> io::Result<Box<[Self]>> {
+struct FrameBuffer {
+	data: *mut u8,
+	length: usize,
+}
+
+impl FrameBufferPool {
+	pub fn new(dev: &impl AsFd, count: u32) -> io::Result<Self> {
 		let mut req: v4l2_requestbuffers = unsafe { mem::zeroed() };
 		req.count = count;
 		req.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -104,11 +108,68 @@ impl FrameBuffer {
 			set_v4l2_reqbufs(dev.as_fd().as_raw_fd(), &req)
 				.expect("Failed setting request buffers");
 		}
-		(0..count)
+		let pool = (0..count)
 			.map(|idx| FrameBuffer::create(dev, idx))
-			.collect()
+			.collect::<io::Result<_>>()?;
+
+		Ok(Self { pool, idx: 0 })
 	}
 
+	pub fn len(&self) -> usize {
+		self.pool.len()
+	}
+
+	pub(super) async fn capture(&mut self, dev: &mut AsyncFd<OwnedFd>) -> io::Result<&[u8]> {
+		let len = self.pool.len() as u32;
+		let frame = &mut self.pool[self.idx as usize];
+		let image = frame.capture(self.idx, dev).await?;
+		self.idx = (self.idx + 1) % len;
+		Ok(image)
+	}
+
+	pub(super) fn enqueue(&mut self, dev: &mut AsyncFd<OwnedFd>) -> io::Result<()> {
+		for (idx, frame) in self.pool.iter_mut().enumerate() {
+			frame.enqueue(idx as u32, dev)?;
+		}
+		Ok(())
+	}
+
+	pub(super) async fn dequeue(&mut self, dev: &mut AsyncFd<OwnedFd>) -> io::Result<&[u8]> {
+		let buf = loop {
+			let mut guard = dev.readable().await?;
+			let mut buf: v4l2_buffer = unsafe { mem::zeroed() };
+			buf.memory = v4l2_memory_V4L2_MEMORY_MMAP;
+			buf.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
+			let ret = unsafe { v4l2_dequeue(dev.as_raw_fd(), &mut buf) };
+			match ret {
+				Ok(_) => break buf,
+				Err(Errno::EAGAIN) => {
+					guard.clear_ready();
+					continue;
+				}
+				Err(e) => return Err(io::Error::from_raw_os_error(e as i32)),
+			}
+		};
+
+		let active_frame = &self.pool[buf.index as usize];
+
+		unsafe {
+			Ok(slice::from_raw_parts(
+				active_frame.data,
+				buf.bytesused as usize,
+			))
+		}
+	}
+
+	pub(super) async fn dequeue_all(&mut self, dev: &mut AsyncFd<OwnedFd>) -> io::Result<()> {
+		for _ in 0..self.len() {
+			self.dequeue(dev).await?;
+		}
+		Ok(())
+	}
+}
+
+impl FrameBuffer {
 	fn create(dev: &impl AsFd, index: u32) -> io::Result<Self> {
 		let mut buf: v4l2_buffer = unsafe { mem::zeroed() };
 		buf.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -128,16 +189,23 @@ impl FrameBuffer {
 			.expect("Failed mmap for buffer")
 			.as_ptr() as *mut u8
 		};
-		Ok(Self {
-			length,
-			data,
-			idx: index,
-		})
+		Ok(Self { length, data })
 	}
 
-	pub async fn capture(&mut self, dev: &mut AsyncFd<OwnedFd>) -> io::Result<&[u8]> {
+	fn enqueue(&mut self, idx: u32, dev: &mut AsyncFd<OwnedFd>) -> io::Result<()> {
 		let mut buf: v4l2_buffer = unsafe { mem::zeroed() };
-		buf.index = self.idx;
+		buf.index = idx;
+		buf.memory = v4l2_memory_V4L2_MEMORY_MMAP;
+		buf.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		unsafe {
+			v4l2_queue(dev.as_raw_fd(), &buf)?;
+		}
+		Ok(())
+	}
+
+	async fn capture(&mut self, idx: u32, dev: &mut AsyncFd<OwnedFd>) -> io::Result<&[u8]> {
+		let mut buf: v4l2_buffer = unsafe { mem::zeroed() };
+		buf.index = idx;
 		buf.memory = v4l2_memory_V4L2_MEMORY_MMAP;
 		buf.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
 		unsafe {

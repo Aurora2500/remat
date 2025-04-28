@@ -12,3 +12,4 @@ strum = { version = "0.27.1", features = ["strum_macros"] }
 strum_macros = "0.27.1"
 tokio = { version = "1.44.1", features = ["full", "io-util", "net", "rt", "rt-multi-thread", "sync"] }
 v4l2-sys = {path = "./rust-v4l2-sys"}
+wgpu = "24.0.3"

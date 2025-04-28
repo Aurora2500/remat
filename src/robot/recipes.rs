@@ -1,6 +1,9 @@
 use bytes::{BufMut, BytesMut};
 use color_eyre::eyre::{Ok, Result};
-use std::fmt::{Display, Write};
+use std::{
+	fmt::{Display, Write},
+	process::CommandArgs,
+};
 use strum_macros::EnumIter;
 
 const INT_REGISTER_OFFSET: u8 = 24;
@@ -12,7 +15,8 @@ pub enum Recipe {
 		ip: u32,
 		port: u16,
 	},
-	ServoJ {
+	JCommand {
+		command: i32,
 		q: [f64; 6],
 		speed: f64,
 		acceleration: f64,
@@ -30,7 +34,8 @@ impl Recipe {
 				bytes.put_u32(ip);
 				bytes.put_u32(port as u32);
 			}
-			Recipe::ServoJ {
+			Recipe::JCommand {
+				command,
 				q,
 				speed,
 				acceleration,
@@ -38,7 +43,8 @@ impl Recipe {
 				lookahead_time,
 				gain,
 			} => {
-				bytes.put_u8(RecipeId::ServoJ as u8);
+				bytes.put_u8(RecipeId::JCommand as u8);
+				bytes.put_i32(command);
 				for p in q {
 					bytes.put_f64(p);
 				}
@@ -56,7 +62,7 @@ impl Recipe {
 #[derive(Debug, Clone, Copy, EnumIter)]
 pub enum RecipeId {
 	Connection = 1,
-	ServoJ = 2,
+	JCommand = 2,
 }
 
 macro_rules! write_regs_fmt {
@@ -80,7 +86,7 @@ impl RecipeId {
 			Self::Connection => {
 				write_regs!(bytes, IntReg(0), IntReg(1))
 			}
-			Self::ServoJ => {
+			Self::JCommand => {
 				write_regs!(
 					bytes,
 					IntReg(0),
