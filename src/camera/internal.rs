@@ -127,14 +127,21 @@ impl FrameBufferPool {
 		Ok(image)
 	}
 
-	pub(super) fn enqueue(&mut self, dev: &mut AsyncFd<OwnedFd>) -> io::Result<()> {
+	pub(super) fn enqueue_all(&mut self, dev: &mut AsyncFd<OwnedFd>) -> io::Result<()> {
 		for (idx, frame) in self.pool.iter_mut().enumerate() {
-			frame.enqueue(idx as u32, dev)?;
+			frame.enqueue(idx, dev)?;
 		}
 		Ok(())
 	}
 
-	pub(super) async fn dequeue(&mut self, dev: &mut AsyncFd<OwnedFd>) -> io::Result<&[u8]> {
+	pub(super) fn enqueue(&mut self, idx: usize, dev: &mut AsyncFd<OwnedFd>) -> io::Result<()> {
+		self.pool[idx].enqueue(idx, dev)
+	}
+
+	pub(super) async fn dequeue(
+		&mut self,
+		dev: &mut AsyncFd<OwnedFd>,
+	) -> io::Result<(&[u8], usize)> {
 		let buf = loop {
 			let mut guard = dev.readable().await?;
 			let mut buf: v4l2_buffer = unsafe { mem::zeroed() };
@@ -151,12 +158,14 @@ impl FrameBufferPool {
 			}
 		};
 		let active_frame = &mut self.pool[buf.index as usize];
-		active_frame.enqueue(buf.index, dev)?;
+		// previous bug, don't enqueue before frame has been processed
+		// or you get a data race
+		// active_frame.enqueue(buf.index, dev)?;
 
 		unsafe {
-			Ok(slice::from_raw_parts(
-				active_frame.data,
-				buf.bytesused as usize,
+			Ok((
+				slice::from_raw_parts(active_frame.data, buf.bytesused as usize),
+				buf.index as usize,
 			))
 		}
 	}
@@ -192,9 +201,9 @@ impl FrameBuffer {
 		Ok(Self { length, data })
 	}
 
-	fn enqueue(&mut self, idx: u32, dev: &mut AsyncFd<OwnedFd>) -> io::Result<()> {
+	fn enqueue(&mut self, idx: usize, dev: &mut AsyncFd<OwnedFd>) -> io::Result<()> {
 		let mut buf: v4l2_buffer = unsafe { mem::zeroed() };
-		buf.index = idx;
+		buf.index = idx as u32;
 		buf.memory = v4l2_memory_V4L2_MEMORY_MMAP;
 		buf.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
 		unsafe {

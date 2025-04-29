@@ -5,6 +5,7 @@ mod internal;
 use std::{
 	io,
 	marker::PhantomData,
+	ops::Deref,
 	os::fd::{FromRawFd, OwnedFd},
 };
 
@@ -70,7 +71,7 @@ impl Camera {
 		&'cam mut self,
 		buffer: &'buf mut FrameBufferPool,
 	) -> io::Result<CameraStream<'cam, 'buf>> {
-		buffer.enqueue(&mut self.dev)?;
+		buffer.enqueue_all(&mut self.dev)?;
 		Ok(CameraStream { cam: self, buffer })
 	}
 
@@ -83,9 +84,28 @@ impl Camera {
 	}
 }
 
-impl CameraStream<'_, '_> {
-	pub async fn get_frame(&mut self) -> io::Result<&[u8]> {
-		self.buffer.dequeue(&mut self.cam.dev).await
+impl<'cam, 'buf> CameraStream<'cam, 'buf> {
+	// pub async fn get_frame(&mut self) -> io::Result<StreamFrame<'_, 'cam, 'buf>> {
+	// 	let (frame, index) = self.buffer.dequeue(&mut self.cam.dev).await?;
+	// 	Ok(StreamFrame {
+	// 		stream: self,
+	// 		frame,
+	// 		index,
+	// 	})
+	// }
+
+	// pub fn release_frame(&mut self, frame: StreamFrame) -> io::Result<()> {
+	// 	self.buffer.enqueue(frame.index, &mut self.cam.dev)
+	// }
+
+	pub async fn with_frame<F, R>(&mut self, func: F) -> io::Result<R>
+	where
+		F: FnOnce(&[u8]) -> R,
+	{
+		let (frame, index) = self.buffer.dequeue(&mut self.cam.dev).await?;
+		let res = func(frame);
+		self.buffer.enqueue(index, &mut self.cam.dev)?;
+		Ok(res)
 	}
 
 	pub async fn stop(self) -> io::Result<()> {

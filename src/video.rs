@@ -1,7 +1,7 @@
 use std::{
 	ffi::CString,
 	mem,
-	ptr::{null, null_mut, write_bytes},
+	ptr::{self, null, null_mut, write_bytes},
 	time::Instant,
 };
 
@@ -12,8 +12,8 @@ use ffmpeg_sys_next::{
 	avcodec_open2, avcodec_parameters_from_context, avcodec_receive_packet, avcodec_send_frame,
 	avformat_alloc_output_context2, avformat_free_context, avformat_network_deinit,
 	avformat_network_init, avformat_new_stream, avformat_write_header, avio_close, avio_open,
-	memset, AVCodec, AVCodecContext, AVFormatContext, AVFrame, AVPacket, AVPixelFormat, AVRational,
-	AVStream, AVIO_FLAG_WRITE, AV_LOG_WARNING,
+	memset, AVCodec, AVCodecContext, AVColorRange, AVFormatContext, AVFrame, AVPacket,
+	AVPixelFormat, AVRational, AVStream, AVIO_FLAG_WRITE, AV_LOG_WARNING,
 };
 
 pub struct VideoContext {}
@@ -39,8 +39,6 @@ impl Drop for VideoContext {
 #[must_use]
 pub struct Encoder {
 	format_ctx: *mut AVFormatContext,
-	codec: *const AVCodec,
-	video_stream: *mut AVStream,
 	codec_ctx: *mut AVCodecContext,
 	frame: *mut AVFrame,
 }
@@ -70,7 +68,8 @@ impl Encoder {
 			(*video_stream).time_base = AVRational { num: 1, den: 25 };
 			(*codec_ctx).width = 1920;
 			(*codec_ctx).height = 1080;
-			(*codec_ctx).pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV420P;
+			(*codec_ctx).pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV444P;
+			(*codec_ctx).color_range = AVColorRange::AVCOL_RANGE_JPEG;
 			(*codec_ctx).time_base = time_base;
 			(*codec_ctx).framerate = framerate;
 			(*codec_ctx).gop_size = 10;
@@ -90,11 +89,36 @@ impl Encoder {
 			let frame = av_frame_alloc();
 			(*frame).width = 1920;
 			(*frame).height = 1080;
-			(*frame).format = AVPixelFormat::AV_PIX_FMT_YUV420P as i32;
+			(*frame).format = AVPixelFormat::AV_PIX_FMT_YUV444P as i32;
+			(*frame).color_range = AVColorRange::AVCOL_RANGE_JPEG;
 			av_frame_get_buffer(frame, 32);
-		}
 
-		todo!()
+			Self {
+				format_ctx,
+				codec_ctx,
+				frame,
+			}
+		}
+	}
+
+	pub fn encode(&mut self, pts: i64, y: &[u8], cb: &[u8], cr: &[u8]) {
+		unsafe {
+			av_frame_make_writable(self.frame);
+			ptr::copy_nonoverlapping(y.as_ptr(), (*self.frame).data[0], y.len());
+			ptr::copy_nonoverlapping(cb.as_ptr(), (*self.frame).data[0], cb.len());
+			ptr::copy_nonoverlapping(cr.as_ptr(), (*self.frame).data[0], cr.len());
+			// let image = create_image(i as u8);
+			// ptr::copy_nonoverlapping(image, (*frame).data[0], 1920 * 1080 * 3);
+			(*self.frame).pts = pts * 40;
+			(*self.frame).time_base = AVRational { num: 1, den: 25 };
+
+			avcodec_send_frame(self.codec_ctx, self.frame);
+			let packet = av_packet_alloc();
+			while avcodec_receive_packet(self.codec_ctx, packet) == 0 {
+				av_interleaved_write_frame(self.format_ctx, packet);
+				av_packet_unref(packet);
+			}
+		}
 	}
 
 	pub fn finish(self) {
@@ -102,7 +126,6 @@ impl Encoder {
 			format_ctx,
 			mut codec_ctx,
 			mut frame,
-			..
 		} = self;
 
 		unsafe {
@@ -147,6 +170,7 @@ pub fn test() {
 		(*codec_ctx).width = 1920;
 		(*codec_ctx).height = 1080;
 		(*codec_ctx).pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV420P;
+		(*codec_ctx).color_range = AVColorRange::AVCOL_RANGE_JPEG;
 		(*codec_ctx).time_base = time_base;
 		(*codec_ctx).framerate = framerate;
 		(*codec_ctx).gop_size = 10;
