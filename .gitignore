@@ -1,3 +1,5 @@
 *.make
 Makefile
 target
+
+*.jpeg

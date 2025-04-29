@@ -150,8 +150,8 @@ impl FrameBufferPool {
 				Err(e) => return Err(io::Error::from_raw_os_error(e as i32)),
 			}
 		};
-
-		let active_frame = &self.pool[buf.index as usize];
+		let active_frame = &mut self.pool[buf.index as usize];
+		active_frame.enqueue(buf.index, dev)?;
 
 		unsafe {
 			Ok(slice::from_raw_parts(

@@ -2,6 +2,7 @@ use std::{fs::File, io::Write};
 
 use camera::{Brightness, ExposureAuto, Gain, Gamma};
 use color_eyre::eyre::Result;
+use tokio::fs::DirBuilder;
 use video::{test, VideoContext};
 
 mod camera;
@@ -30,6 +31,15 @@ async fn main() -> Result<()> {
 
 	let mut image = File::create("woah.jpeg")?;
 	image.write(frame_data)?;
+
+	let mut stream = cam.stream(&mut buffers)?;
+	for i in 0..100 {
+		let frame_data = stream.get_frame().await?;
+		let mut image = File::create(format!("frames/frame_{i}.jpeg"))?;
+		image.write(frame_data)?;
+		drop(image);
+	}
+	stream.stop().await?;
 
 	// let addr = "169.254.129.110:0";
 	// let callback_addr = Some(Ipv4Addr::new(169, 254, 129, 50));

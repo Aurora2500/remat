@@ -1,9 +1,6 @@
 use bytes::{BufMut, BytesMut};
 use color_eyre::eyre::{Ok, Result};
-use std::{
-	fmt::{Display, Write},
-	process::CommandArgs,
-};
+use std::fmt::{Display, Write};
 use strum_macros::EnumIter;
 
 const INT_REGISTER_OFFSET: u8 = 24;
