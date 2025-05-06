@@ -5,7 +5,6 @@ mod internal;
 use std::{
 	io,
 	marker::PhantomData,
-	ops::Deref,
 	os::fd::{FromRawFd, OwnedFd},
 };
 
@@ -85,19 +84,6 @@ impl Camera {
 }
 
 impl<'cam, 'buf> CameraStream<'cam, 'buf> {
-	// pub async fn get_frame(&mut self) -> io::Result<StreamFrame<'_, 'cam, 'buf>> {
-	// 	let (frame, index) = self.buffer.dequeue(&mut self.cam.dev).await?;
-	// 	Ok(StreamFrame {
-	// 		stream: self,
-	// 		frame,
-	// 		index,
-	// 	})
-	// }
-
-	// pub fn release_frame(&mut self, frame: StreamFrame) -> io::Result<()> {
-	// 	self.buffer.enqueue(frame.index, &mut self.cam.dev)
-	// }
-
 	pub async fn with_frame<F, R>(&mut self, func: F) -> io::Result<R>
 	where
 		F: FnOnce(&[u8]) -> R,
